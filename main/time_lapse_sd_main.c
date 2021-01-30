@@ -29,7 +29,7 @@
 
 static const char *TAG = "MAIN";
 
-#define TIME_BETWEEN_PIC_MS (2000UL)
+#define TIME_BETWEEN_PIC_MS (1500UL)
 #define MOUNT_POINT "/sdcard"
 
 // DMA channel to be used by the SPI peripheral
@@ -92,9 +92,9 @@ static camera_config_t camera_config = {
     .ledc_channel = LEDC_CHANNEL_0,
 
     .pixel_format = PIXFORMAT_JPEG, //YUV422,GRAYSCALE,RGB565,JPEG
-    .frame_size = FRAMESIZE_HD,     //QQVGA-UXGA Do not use sizes above QVGA when not JPEG
+    .frame_size = FRAMESIZE_XGA,    //QQVGA-UXGA Do not use sizes above QVGA when not JPEG
 
-    .jpeg_quality = 2,  //0-63 lower number means higher quality
+    .jpeg_quality = 5,  //0-63 lower number means higher quality
     .fb_count = 2       //if more than one, i2s runs in continuous mode. Use only with JPEG
 };
 
@@ -130,7 +130,7 @@ void app_main(void)
     size_t count = 0;
     FILE *f;
     char file_name[32];
-    uint32_t start_tm, stop_tm;
+    uint32_t start_tm, stop_tm, taken;
     int rv;
 
     ESP_ERROR_CHECK(init_camera());
@@ -199,7 +199,7 @@ void app_main(void)
         camera_fb_t *pic = esp_camera_fb_get();
 
         // use pic->buf to access the image
-        ESP_LOGD(TAG, "Picture taken! Its size was: %zu bytes", pic->len);
+        ESP_LOGI(TAG, "Picture taken! Its size was: %zu bytes", pic->len);
         ESP_LOGI(TAG, "Saving picture to file: %s", file_name);
         rv = fwrite(pic->buf, sizeof(uint8_t), pic->len, f);
         assert(rv == pic->len);
@@ -213,13 +213,14 @@ void app_main(void)
         assert(rv < sizeof(file_name));
         f = fopen(file_name, "wb");
         assert(f);
-        ESP_LOGI(TAG, "Picture saved");
 
         stop_tm = esp_timer_get_time() / 1000UL;
         assert(stop_tm > start_tm);
-        if ((stop_tm - start_tm) < TIME_BETWEEN_PIC_MS)
+        taken = stop_tm - start_tm;
+        ESP_LOGI(TAG, "Picture saved (%ums)", taken);
+        if (taken < TIME_BETWEEN_PIC_MS)
         {
-            vTaskDelay((TIME_BETWEEN_PIC_MS - (stop_tm - start_tm)) / portTICK_RATE_MS);
+            vTaskDelay((TIME_BETWEEN_PIC_MS - taken) / portTICK_RATE_MS);
         }
     }
 
