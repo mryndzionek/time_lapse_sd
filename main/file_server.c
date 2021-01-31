@@ -76,6 +76,7 @@ static esp_err_t favicon_get_handler(httpd_req_t *req)
 static esp_err_t http_resp_dir_html(httpd_req_t *req, const char *dirpath)
 {
     char entrypath[FILE_PATH_MAX];
+    char tmppath[FILE_PATH_MAX];
     char entrysize[16];
     const char *entrytype;
     size_t count;
@@ -83,7 +84,13 @@ static esp_err_t http_resp_dir_html(httpd_req_t *req, const char *dirpath)
     struct dirent *entry;
     struct stat entry_stat;
 
-    DIR *dir = opendir(dirpath);
+    strlcpy(tmppath, dirpath, sizeof(tmppath));
+    if(tmppath[strlen(tmppath) - 1] == '/')
+    {
+        *(&tmppath[strlen(tmppath) - 1]) = 0;
+    }
+
+    DIR *dir = opendir(tmppath);
     const size_t dirpath_len = strlen(dirpath);
 
     /* Retrieve the base path of file storage to construct the full path */
