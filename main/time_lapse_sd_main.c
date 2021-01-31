@@ -176,6 +176,8 @@ static void wifi_init_softap(void)
              APP_ESP_WIFI_SSID, APP_ESP_WIFI_PASS, APP_ESP_WIFI_CHANNEL);
 }
 
+esp_err_t start_file_server(const char *base_path);
+
 void app_main(void)
 {
     esp_err_t ret;
@@ -260,8 +262,10 @@ void app_main(void)
 
     // Card has been initialized, print its properties
     sdmmc_card_print_info(stdout, card);
-
     wifi_init_softap();
+
+    /* Start the file server */
+    ESP_ERROR_CHECK(start_file_server(MOUNT_POINT));
 
     rv = snprintf(file_name, sizeof(file_name), MOUNT_POINT "/%06d.JPG", count++);
     assert(rv > 0);
