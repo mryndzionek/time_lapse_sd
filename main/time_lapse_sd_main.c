@@ -15,13 +15,19 @@
 #include "freertos/task.h"
 
 #include "esp_err.h"
+#include "esp_event.h"
 #include "esp_log.h"
+#include "nvs_flash.h"
 #include "esp_vfs_fat.h"
 #include "esp_camera.h"
+#include "esp_wifi.h"
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
 #include "sdmmc_cmd.h"
 #include "sdkconfig.h"
+
+#include "lwip/err.h"
+#include "lwip/sys.h"
 
 #ifdef CONFIG_IDF_TARGET_ESP32
 #include "driver/sdmmc_host.h"
@@ -34,7 +40,7 @@ static const char *TAG = "MAIN";
 
 // DMA channel to be used by the SPI peripheral
 #ifndef SPI_DMA_CHAN
-#define SPI_DMA_CHAN    1
+#define SPI_DMA_CHAN 1
 #endif //SPI_DMA_CHAN
 
 // When testing SD and SPI modes, keep in mind that once the card has been
@@ -46,8 +52,8 @@ static const char *TAG = "MAIN";
 // Note that a pull-up on CS line is required in SD mode.
 #define PIN_NUM_MISO (22)
 #define PIN_NUM_MOSI (19)
-#define PIN_NUM_CLK  (21)
-#define PIN_NUM_CS   (0)
+#define PIN_NUM_CLK (21)
+#define PIN_NUM_CS (0)
 
 #define CAM_PIN_PWDN (-1)  //power down is not used
 #define CAM_PIN_RESET (-1) //software reset will be performed
@@ -66,6 +72,11 @@ static const char *TAG = "MAIN";
 #define CAM_PIN_VSYNC (5)
 #define CAM_PIN_HREF (27)
 #define CAM_PIN_PCLK (25)
+
+#define APP_ESP_WIFI_SSID CONFIG_ESP_WIFI_SSID
+#define APP_ESP_WIFI_PASS CONFIG_ESP_WIFI_PASSWORD
+#define APP_ESP_WIFI_CHANNEL CONFIG_ESP_WIFI_CHANNEL
+#define APP_MAX_STA_CONN CONFIG_ESP_MAX_STA_CONN
 
 static camera_config_t camera_config = {
     .pin_pwdn = CAM_PIN_PWDN,
@@ -94,8 +105,8 @@ static camera_config_t camera_config = {
     .pixel_format = PIXFORMAT_JPEG, //YUV422,GRAYSCALE,RGB565,JPEG
     .frame_size = FRAMESIZE_XGA,    //QQVGA-UXGA Do not use sizes above QVGA when not JPEG
 
-    .jpeg_quality = 5,  //0-63 lower number means higher quality
-    .fb_count = 2       //if more than one, i2s runs in continuous mode. Use only with JPEG
+    .jpeg_quality = 5, //0-63 lower number means higher quality
+    .fb_count = 2      //if more than one, i2s runs in continuous mode. Use only with JPEG
 };
 
 static esp_err_t init_camera()
@@ -109,6 +120,60 @@ static esp_err_t init_camera()
     }
 
     return ESP_OK;
+}
+
+static void wifi_event_handler(void *arg, esp_event_base_t event_base,
+                               int32_t event_id, void *event_data)
+{
+    if (event_id == WIFI_EVENT_AP_STACONNECTED)
+    {
+        wifi_event_ap_staconnected_t *event = (wifi_event_ap_staconnected_t *)event_data;
+        ESP_LOGI(TAG, "station " MACSTR " join, AID=%d",
+                 MAC2STR(event->mac), event->aid);
+    }
+    else if (event_id == WIFI_EVENT_AP_STADISCONNECTED)
+    {
+        wifi_event_ap_stadisconnected_t *event = (wifi_event_ap_stadisconnected_t *)event_data;
+        ESP_LOGI(TAG, "station " MACSTR " leave, AID=%d",
+                 MAC2STR(event->mac), event->aid);
+    }
+}
+
+static void wifi_init_softap(void)
+{
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_create_default_wifi_ap();
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+                                                        ESP_EVENT_ANY_ID,
+                                                        &wifi_event_handler,
+                                                        NULL,
+                                                        NULL));
+
+    wifi_config_t wifi_config = {
+        .ap = {
+            .ssid = APP_ESP_WIFI_SSID,
+            .ssid_len = strlen(APP_ESP_WIFI_SSID),
+            .channel = APP_ESP_WIFI_CHANNEL,
+            .password = APP_ESP_WIFI_PASS,
+            .max_connection = APP_MAX_STA_CONN,
+            .authmode = WIFI_AUTH_WPA_WPA2_PSK},
+    };
+    if (strlen(APP_ESP_WIFI_PASS) == 0)
+    {
+        wifi_config.ap.authmode = WIFI_AUTH_OPEN;
+    }
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    ESP_LOGI(TAG, "wifi_init_softap finished. SSID:%s password:%s channel:%d",
+             APP_ESP_WIFI_SSID, APP_ESP_WIFI_PASS, APP_ESP_WIFI_CHANNEL);
 }
 
 void app_main(void)
@@ -132,6 +197,15 @@ void app_main(void)
     char file_name[32];
     uint32_t start_tm, stop_tm, taken;
     int rv;
+
+    //Initialize NVS
+    ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
 
     ESP_ERROR_CHECK(init_camera());
 
@@ -179,12 +253,15 @@ void app_main(void)
             ESP_LOGE(TAG, "Failed to initialize the card (%s). "
                           "Make sure SD card lines have pull-up resistors in place.",
                      esp_err_to_name(ret));
+            esp_restart();
         }
         return;
     }
 
     // Card has been initialized, print its properties
     sdmmc_card_print_info(stdout, card);
+
+    wifi_init_softap();
 
     rv = snprintf(file_name, sizeof(file_name), MOUNT_POINT "/%06d.JPG", count++);
     assert(rv > 0);
