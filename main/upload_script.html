@@ -1,8 +1,19 @@
 <table class="fixed" border="0">
     <col width="1000px" /><col width="500px" />
-    <tr><td>
+    <tr><td width="20%">
         <h2>ESP32 File Server</h2>
-    </td><td>
+    </td>
+    <td width="20%">
+         <form method="post" action="/controls/prev">
+            <button style="width:80%;">< Previous</button>
+         </form>
+    </td>
+    <td width="20%">
+         <form method="post" action="/controls/next">
+            <button style="width:80%;">Next ></button>
+         </form>
+   </td>
+    <td width="40%">
         <table border="0">
             <tr>
                 <td>
@@ -17,7 +28,7 @@
                     <label for="filepath">Set path on server</label>
                 </td>
                 <td>
-                    <input id="filepath" type="text" style="width:100%;">
+                    <input id="filepath" type="text" style="width:80%;">
                 </td>
                 <td>
                     <button id="upload" type="button" onclick="upload()">Upload</button>

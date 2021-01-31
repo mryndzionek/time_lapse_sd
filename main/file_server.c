@@ -29,15 +29,19 @@
 #define MAX_FILE_SIZE   (200*1024) // 200 KB
 #define MAX_FILE_SIZE_STR "200KB"
 
-/* Scratch buffer size */
-#define SCRATCH_BUFSIZE  8192
+#define MAX_FILES_DISP (25)
 
-struct file_server_data {
+/* Scratch buffer size */
+#define SCRATCH_BUFSIZE  (8192)
+
+struct file_server_data
+{
     /* Base path of file storage */
     char base_path[ESP_VFS_PATH_MAX + 1];
 
     /* Scratch buffer for temporary storage during file transfer */
     char scratch[SCRATCH_BUFSIZE];
+    size_t start;
 };
 
 static const char *TAG = "file_server";
@@ -74,6 +78,7 @@ static esp_err_t http_resp_dir_html(httpd_req_t *req, const char *dirpath)
     char entrypath[FILE_PATH_MAX];
     char entrysize[16];
     const char *entrytype;
+    size_t count;
 
     struct dirent *entry;
     struct stat entry_stat;
@@ -109,12 +114,33 @@ static esp_err_t http_resp_dir_html(httpd_req_t *req, const char *dirpath)
         "<thead><tr><th>Name</th><th>Type</th><th>Size (Bytes)</th><th>Delete</th></tr></thead>"
         "<tbody>");
 
+    // start listing files from 'start'
+    size_t start = ((struct file_server_data *)req->user_ctx)->start;
+    count = 0;
+
+    while (start--)
+    {
+        entry = readdir(dir);
+        if (!entry)
+        {
+            ((struct file_server_data *)req->user_ctx)->start = count > MAX_FILES_DISP ? count - MAX_FILES_DISP : 0;
+            break;
+        }
+        else
+        {
+            count++;
+        }
+    }
+
+    count = 0;
     /* Iterate over all files / folders and fetch their names and sizes */
-    while ((entry = readdir(dir)) != NULL) {
+    while (((entry = readdir(dir)) != NULL) && (count < MAX_FILES_DISP))
+    {
         entrytype = (entry->d_type == DT_DIR ? "directory" : "file");
 
         strlcpy(entrypath + dirpath_len, entry->d_name, sizeof(entrypath) - dirpath_len);
-        if (stat(entrypath, &entry_stat) == -1) {
+        if (stat(entrypath, &entry_stat) == -1)
+        {
             ESP_LOGE(TAG, "Failed to stat %s : %s", entrytype, entry->d_name);
             continue;
         }
@@ -125,7 +151,8 @@ static esp_err_t http_resp_dir_html(httpd_req_t *req, const char *dirpath)
         httpd_resp_sendstr_chunk(req, "<tr><td><a href=\"");
         httpd_resp_sendstr_chunk(req, req->uri);
         httpd_resp_sendstr_chunk(req, entry->d_name);
-        if (entry->d_type == DT_DIR) {
+        if (entry->d_type == DT_DIR)
+        {
             httpd_resp_sendstr_chunk(req, "/");
         }
         httpd_resp_sendstr_chunk(req, "\">");
@@ -140,6 +167,8 @@ static esp_err_t http_resp_dir_html(httpd_req_t *req, const char *dirpath)
         httpd_resp_sendstr_chunk(req, entry->d_name);
         httpd_resp_sendstr_chunk(req, "\"><button type=\"submit\">Delete</button></form>");
         httpd_resp_sendstr_chunk(req, "</td></tr>\n");
+
+        count++;
     }
     closedir(dir);
 
@@ -433,6 +462,39 @@ static esp_err_t delete_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t controls_post_handler(httpd_req_t *req)
+{
+    const char *cmd = req->uri + sizeof("/controls/") - 1;
+
+    if (strncmp(cmd, "prev", sizeof("prev") - 1) == 0)
+    {
+        if (((struct file_server_data *)req->user_ctx)->start <= MAX_FILES_DISP)
+        {
+            ((struct file_server_data *)req->user_ctx)->start = 0;
+        }
+        else
+        {
+            ((struct file_server_data *)req->user_ctx)->start -= MAX_FILES_DISP;
+        }
+    }
+    else if (strncmp(cmd, "next", sizeof("next") - 1) == 0)
+    {
+        ((struct file_server_data *)req->user_ctx)->start += MAX_FILES_DISP;
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Unknown control command: %s", cmd);
+        /* Respond with 400 Bad Request */
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unknown control command");
+        return ESP_FAIL;
+    }
+    /* Redirect onto root to see the updated file list */
+    httpd_resp_set_status(req, "303 See Other");
+    httpd_resp_set_hdr(req, "Location", "/");
+    httpd_resp_sendstr(req, "Controls update successfull");
+    return ESP_OK;
+}
+
 /* Function to start the file server */
 esp_err_t start_file_server(const char *base_path)
 {
@@ -457,6 +519,7 @@ esp_err_t start_file_server(const char *base_path)
     }
     strlcpy(server_data->base_path, base_path,
             sizeof(server_data->base_path));
+    server_data->start = 0;
 
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -498,6 +561,14 @@ esp_err_t start_file_server(const char *base_path)
         .user_ctx  = server_data    // Pass server data as context
     };
     httpd_register_uri_handler(server, &file_delete);
+
+    httpd_uri_t file_controls = {
+        .uri       = "/controls/*",
+        .method    = HTTP_POST,
+        .handler   = controls_post_handler,
+        .user_ctx  = server_data    // Pass server data as context
+    };
+    httpd_register_uri_handler(server, &file_controls);
 
     return ESP_OK;
 }
