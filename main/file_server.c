@@ -38,6 +38,7 @@ struct file_server_data
 {
     /* Base path of file storage */
     char base_path[ESP_VFS_PATH_MAX + 1];
+    char rel_path[ESP_VFS_PATH_MAX + 1];
 
     /* Scratch buffer for temporary storage during file transfer */
     char scratch[SCRATCH_BUFSIZE];
@@ -257,6 +258,12 @@ static esp_err_t download_get_handler(httpd_req_t *req)
 
     /* If name has trailing '/', respond with directory contents */
     if (filename[strlen(filename) - 1] == '/') {
+        struct file_server_data *server_data = (struct file_server_data *)req->user_ctx;
+        if(strncmp(filename, server_data->rel_path, strlen(filename)) != 0)
+        {
+            server_data->start = 0;
+        }
+        strlcpy(server_data->rel_path, filename, sizeof(server_data->rel_path));
         return http_resp_dir_html(req, filepath);
     }
 
@@ -472,21 +479,22 @@ static esp_err_t delete_post_handler(httpd_req_t *req)
 static esp_err_t controls_post_handler(httpd_req_t *req)
 {
     const char *cmd = req->uri + sizeof("/controls/") - 1;
+    struct file_server_data *server_data = (struct file_server_data *)req->user_ctx;
 
     if (strncmp(cmd, "prev", sizeof("prev") - 1) == 0)
     {
-        if (((struct file_server_data *)req->user_ctx)->start <= MAX_FILES_DISP)
+        if (server_data->start <= MAX_FILES_DISP)
         {
-            ((struct file_server_data *)req->user_ctx)->start = 0;
+            server_data->start = 0;
         }
         else
         {
-            ((struct file_server_data *)req->user_ctx)->start -= MAX_FILES_DISP;
+            server_data->start -= MAX_FILES_DISP;
         }
     }
     else if (strncmp(cmd, "next", sizeof("next") - 1) == 0)
     {
-        ((struct file_server_data *)req->user_ctx)->start += MAX_FILES_DISP;
+        server_data->start += MAX_FILES_DISP;
     }
     else
     {
@@ -497,7 +505,7 @@ static esp_err_t controls_post_handler(httpd_req_t *req)
     }
     /* Redirect onto root to see the updated file list */
     httpd_resp_set_status(req, "303 See Other");
-    httpd_resp_set_hdr(req, "Location", "/");
+    httpd_resp_set_hdr(req, "Location", server_data->rel_path);
     httpd_resp_sendstr(req, "Controls update successfull");
     return ESP_OK;
 }
@@ -526,6 +534,7 @@ esp_err_t start_file_server(const char *base_path)
     }
     strlcpy(server_data->base_path, base_path,
             sizeof(server_data->base_path));
+    strlcpy(server_data->rel_path, "/", sizeof(server_data->rel_path));
     server_data->start = 0;
 
     httpd_handle_t server = NULL;
