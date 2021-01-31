@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/unistd.h>
 #include <sys/stat.h>
+#include <dirent.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -264,18 +265,29 @@ void app_main(void)
 
     // Card has been initialized, print its properties
     sdmmc_card_print_info(stdout, card);
-    wifi_init_softap();
-
-    /* Start the file server */
-    ESP_ERROR_CHECK(start_file_server(MOUNT_POINT));
 
     {
         nvs_handle_t my_handle;
         ESP_ERROR_CHECK(nvs_open("storage", NVS_READWRITE, &my_handle));
-        nvs_get_i64(my_handle, "restart_counter", &restart_counter);
-        ESP_ERROR_CHECK(nvs_set_i64(my_handle, "restart_counter", restart_counter + 1));
+        DIR *dir = opendir(MOUNT_POINT"/");
+        assert(dir);
+        struct dirent *entry = readdir(dir);
+        if (entry)
+        {
+            nvs_get_i64(my_handle, "restart_counter", &restart_counter);
+            ESP_ERROR_CHECK(nvs_set_i64(my_handle, "restart_counter", restart_counter + 1));
+        } else {
+            ESP_LOGW(TAG, "SD card emtpy. Resetting restart counter");
+            ESP_ERROR_CHECK(nvs_set_i64(my_handle, "restart_counter", restart_counter));
+        }
+        closedir(dir);
         nvs_close(my_handle);
     }
+
+    wifi_init_softap();
+
+    /* Start the file server */
+    ESP_ERROR_CHECK(start_file_server(MOUNT_POINT));
 
     rv = snprintf(dir_name, sizeof(dir_name), MOUNT_POINT "/%06lld", restart_counter);
     assert(rv > 0);
