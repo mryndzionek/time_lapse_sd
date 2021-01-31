@@ -197,7 +197,9 @@ void app_main(void)
     size_t count = 0;
     FILE *f;
     char file_name[32];
+    char dir_name[32];
     uint32_t start_tm, stop_tm, taken;
+    int64_t restart_counter = 0;
     int rv;
 
     //Initialize NVS
@@ -267,7 +269,22 @@ void app_main(void)
     /* Start the file server */
     ESP_ERROR_CHECK(start_file_server(MOUNT_POINT));
 
-    rv = snprintf(file_name, sizeof(file_name), MOUNT_POINT "/%06d.JPG", count++);
+    {
+        nvs_handle_t my_handle;
+        ESP_ERROR_CHECK(nvs_open("storage", NVS_READWRITE, &my_handle));
+        nvs_get_i64(my_handle, "restart_counter", &restart_counter);
+        ESP_ERROR_CHECK(nvs_set_i64(my_handle, "restart_counter", restart_counter + 1));
+        nvs_close(my_handle);
+    }
+
+    rv = snprintf(dir_name, sizeof(dir_name), MOUNT_POINT "/%06lld", restart_counter);
+    assert(rv > 0);
+    assert(rv < sizeof(dir_name));
+
+    rv = mkdir(dir_name, 0);
+    assert(rv == 0);
+
+    rv = snprintf(file_name, sizeof(file_name), "%s/%06d.JPG", dir_name, count++);
     assert(rv > 0);
     assert(rv < sizeof(file_name));
     f = fopen(file_name, "wb");
@@ -289,7 +306,7 @@ void app_main(void)
         // prepare for next file
         rv = fclose(f);
         assert(rv == 0);
-        rv = snprintf(file_name, sizeof(file_name), MOUNT_POINT "/%06d.JPG", count++);
+        rv = snprintf(file_name, sizeof(file_name), "%s/%06d.JPG", dir_name, count++);
         assert(rv > 0);
         assert(rv < sizeof(file_name));
         f = fopen(file_name, "wb");
